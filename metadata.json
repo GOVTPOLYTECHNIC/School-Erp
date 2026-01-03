@@ -1,0 +1,7 @@
+{
+  "name": "Gramodyog Sewa Sansthan ERP",
+  "description": "A comprehensive college ERP system for managing students, fees, and receipts across three specialized institutions: Rajiv Gandhi Polytechnic, Rajiv Gandhi ITI, and Gramodyog Sewa Sansthan.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
