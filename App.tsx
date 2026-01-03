@@ -35,7 +35,8 @@ import {
   RefreshCw,
   ShieldCheck,
   Smartphone,
-  Info
+  Info,
+  FileSpreadsheet
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -152,6 +153,10 @@ const App: React.FC = () => {
   const [collectingFeeFor, setCollectingFeeFor] = useState<Student | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [tempPhoto, setTempPhoto] = useState<string | undefined>(undefined);
+  const [importPreview, setImportPreview] = useState<Student[] | null>(null);
+  
+  // Track selected institution in modal to dynamically show branches
+  const [selectedInstInModal, setSelectedInstInModal] = useState<InstitutionType>(InstitutionType.POLYTECHNIC);
 
   const selectedStudentForReceipt = useMemo(() => {
     if (!showReceipt) return null;
@@ -201,15 +206,66 @@ const App: React.FC = () => {
     localStorage.removeItem('gss_auth');
   };
 
-  // --- Backup Logic ---
-  const handleExportBackup = () => {
-    const data = {
-      students,
-      allReceipts,
-      expenses,
-      notices,
-      backupDate: new Date().toISOString()
+  // --- CSV Import Logic ---
+  const handleCsvImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      const rows = text.split('\n');
+      const headers = rows[0].split(',').map(h => h.trim().toLowerCase());
+      
+      const parsedStudents: Student[] = [];
+      for (let i = 1; i < rows.length; i++) {
+        if (!rows[i].trim()) continue;
+        const cols = rows[i].split(',').map(c => c.trim());
+        
+        // Dynamic Column Mapping
+        const getVal = (headerName: string) => {
+           const idx = headers.indexOf(headerName);
+           return idx !== -1 ? cols[idx] : '';
+        };
+
+        const instRaw = getVal('institution');
+        let institution = InstitutionType.POLYTECHNIC;
+        if (instRaw.toLowerCase().includes('iti')) institution = InstitutionType.ITI;
+        else if (instRaw.toLowerCase().includes('gss') || instRaw.toLowerCase().includes('sansthan')) institution = InstitutionType.GSS;
+
+        const newStudent: Student = {
+          id: `STU${Date.now()}${i}`,
+          admissionNo: getVal('admission_no') || `GSS/${new Date().getFullYear()}/${Math.floor(100+Math.random()*900)}`,
+          rollNumber: getVal('roll_no') || 'TBD',
+          name: getVal('name') || 'Unknown',
+          fatherName: getVal('father_name') || '',
+          dob: getVal('dob') || '2000-01-01',
+          mobileNumber: getVal('mobile') || '',
+          address: getVal('address') || '',
+          institution: institution,
+          branch: getVal('branch') || INSTITUTIONS[institution].branches[0],
+          enrollmentDate: new Date().toISOString().split('T')[0],
+          currentSemester: 1,
+          totalFeesPaid: Number(getVal('fees_paid')) || 0,
+        };
+        parsedStudents.push(newStudent);
+      }
+      setImportPreview(parsedStudents);
     };
+    reader.readAsText(file);
+    e.target.value = ''; // Reset input
+  };
+
+  const confirmImport = () => {
+    if (importPreview) {
+      setStudents(prev => [...prev, ...importPreview]);
+      setImportPreview(null);
+      alert(`Successfully imported ${importPreview.length} students!`);
+    }
+  };
+
+  const handleExportBackup = () => {
+    const data = { students, allReceipts, expenses, notices, backupDate: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -217,41 +273,39 @@ const App: React.FC = () => {
     a.download = `GSS_Backup_${new Date().toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    alert('Backup data has been exported successfully.');
   };
 
   const handleImportBackup = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
         const data = JSON.parse(event.target?.result as string);
         if (data.students && data.allReceipts) {
-          if (window.confirm('Importing this file will overwrite your current data. Are you sure?')) {
+          if (window.confirm('This will overwrite current data. Proceed?')) {
             setStudents(data.students);
             setAllReceipts(data.allReceipts);
             setExpenses(data.expenses || []);
             setNotices(data.notices || []);
-            alert('Backup restored successfully!');
           }
-        } else {
-          alert('Invalid backup file format.');
         }
-      } catch (err) {
-        alert('Error reading the backup file.');
-      }
+      } catch (err) { alert('Invalid file'); }
     };
     reader.readAsText(file);
-    e.target.value = ''; // Reset input
   };
 
   const handleDelete = (id: string) => {
-    if (window.confirm('Confirm delete student and all history?')) {
+    if (window.confirm('Confirm delete?')) {
       setStudents(prev => prev.filter(s => s.id !== id));
       setAllReceipts(prev => prev.filter(r => r.studentId !== id));
     }
+  };
+
+  const openAddStudentModal = (stu: Student | null = null) => {
+    setEditingStudent(stu);
+    setSelectedInstInModal(stu ? stu.institution : InstitutionType.POLYTECHNIC);
+    setShowModal(true);
   };
 
   const handleSaveStudent = (e: React.FormEvent<HTMLFormElement>) => {
@@ -293,7 +347,8 @@ const App: React.FC = () => {
     };
     setAllReceipts(prev => [...prev, receipt]);
     setStudents(prev => prev.map(s => s.id === collectingFeeFor.id ? {...s, totalFeesPaid: s.totalFeesPaid + amount} : s));
-    setCollectingFeeFor(null); setShowReceipt(receipt);
+    setCollectingFeeFor(null); 
+    setTimeout(() => setShowReceipt(receipt), 100);
   };
 
   const handleAddExpense = (e: React.FormEvent<HTMLFormElement>) => {
@@ -324,7 +379,6 @@ const App: React.FC = () => {
     e.currentTarget.reset();
   };
 
-  // --- Render Login Screen ---
   if (!isLoggedIn) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
@@ -366,7 +420,6 @@ const App: React.FC = () => {
     );
   }
 
-  // --- Main Application ---
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-slate-50">
       {/* Mobile Header */}
@@ -417,7 +470,13 @@ const App: React.FC = () => {
                   </select>
                </div>
             )}
-            <button onClick={() => { setEditingStudent(null); setShowModal(true); }} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase flex items-center gap-2 shadow-lg hover:bg-indigo-700 transition-all"><Plus size={16} /> New Student</button>
+            {activeTab === 'students' && (
+              <label className="bg-emerald-50 text-emerald-600 px-4 py-2 rounded-xl text-xs font-bold uppercase flex items-center gap-2 border border-emerald-100 cursor-pointer hover:bg-emerald-100">
+                <FileSpreadsheet size={16} /> Bulk Import
+                <input type="file" accept=".csv" className="hidden" onChange={handleCsvImport} />
+              </label>
+            )}
+            <button onClick={() => openAddStudentModal()} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase flex items-center gap-2 shadow-lg hover:bg-indigo-700 transition-all"><Plus size={16} /> New Student</button>
           </div>
         </header>
 
@@ -429,7 +488,6 @@ const App: React.FC = () => {
               <StatCard title="Net Balance" value={`₹${financials.balance.toLocaleString()}`} icon={Wallet} color="emerald" />
               <StatCard title="Students" value={students.length} subValue="+3 new today" icon={Users} color="blue" />
             </div>
-
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
               <div className="lg:col-span-2 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                  <h3 className="text-xs font-bold uppercase text-slate-400 mb-6 tracking-widest">Enrollment Distribution</h3>
@@ -448,7 +506,6 @@ const App: React.FC = () => {
                       ))}
                    </div>
                 </div>
-                <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-indigo-500/20 rounded-full blur-3xl"></div>
               </div>
             </div>
           </div>
@@ -483,7 +540,7 @@ const App: React.FC = () => {
                              <td className="px-6 py-4"><div className="flex flex-col"><p className="text-[10px] font-black uppercase text-emerald-500">PAID: ₹{s.totalFeesPaid.toLocaleString()}</p><p className="text-[8px] font-bold text-slate-300 italic">Sem: {s.currentSemester}</p></div></td>
                              <td className="px-6 py-4 text-right">
                                 <div className="flex justify-end gap-1">
-                                   <button onClick={() => { setEditingStudent(s); setShowModal(true); }} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl"><Edit3 size={16} /></button>
+                                   <button onClick={() => openAddStudentModal(s)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl"><Edit3 size={16} /></button>
                                    <button onClick={() => handleDelete(s.id)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl"><Trash2 size={16} /></button>
                                 </div>
                              </td>
@@ -525,85 +582,86 @@ const App: React.FC = () => {
 
         {activeTab === 'management' && (
            <div className="space-y-8 animate-in slide-in-from-bottom-4 duration-500">
-              {/* Mobile App & System Info Card */}
-              <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="md:col-span-2">
-                   <h3 className="text-sm font-black uppercase text-slate-900 mb-4 flex items-center gap-2"><Smartphone size={20} className="text-indigo-600" /> Mobile App & System Info</h3>
-                   <p className="text-xs text-slate-500 mb-4 leading-relaxed">This ERP is optimized for mobile. To install it as an app on your phone:</p>
-                   <ul className="text-[10px] space-y-2 text-slate-600 font-bold mb-6">
-                      <li className="flex items-center gap-2"><CheckCircle size={14} className="text-emerald-500" /> Open this link in Google Chrome (Android) or Safari (iPhone).</li>
-                      <li className="flex items-center gap-2"><CheckCircle size={14} className="text-emerald-500" /> Select "Add to Home Screen" from your browser menu.</li>
-                      <li className="flex items-center gap-2"><CheckCircle size={14} className="text-emerald-500" /> Use the login below to gain access.</li>
-                   </ul>
-                   <div className="p-4 bg-slate-50 rounded-2xl border flex items-center gap-4">
-                      <ShieldCheck size={24} className="text-indigo-400 shrink-0" />
-                      <div>
-                         <p className="text-[9px] uppercase font-black text-slate-400">Default Access</p>
-                         <p className="text-[11px] font-black text-slate-900 uppercase">User: admin | Pass: gss@2025</p>
-                      </div>
-                   </div>
-                </div>
-                <div className="bg-indigo-50 rounded-3xl p-6 flex flex-col items-center justify-center text-center">
-                   <QrCode size={64} className="text-indigo-600 mb-4 opacity-50" />
-                   <p className="text-[9px] font-black uppercase text-indigo-800">Scan to Share</p>
-                   <p className="text-[8px] text-indigo-400 mt-2 font-bold italic leading-tight">Generate QR to quickly share access link among staff.</p>
-                </div>
+              {/* Bulk Import Guidance Card */}
+              <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
+                 <h3 className="text-sm font-black uppercase text-slate-900 mb-6 flex items-center gap-2"><FileSpreadsheet size={20} className="text-emerald-600" /> Student Data Import</h3>
+                 <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 flex flex-col md:flex-row items-center gap-6">
+                    <div className="flex-1">
+                       <p className="text-xs font-black uppercase text-emerald-800 mb-2">Import from .csv</p>
+                       <p className="text-[10px] text-emerald-600 font-medium mb-4 leading-relaxed">Prepare a CSV file with these column headers: <code className="bg-emerald-100 px-1 rounded">Name, Father_Name, Mobile, DOB, Institution, Branch, Address</code>. You can then upload it to add multiple students instantly.</p>
+                       <div className="flex gap-2">
+                          <label className="bg-emerald-600 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-emerald-700 cursor-pointer">
+                             <Upload size={14} /> Upload CSV
+                             <input type="file" accept=".csv" className="hidden" onChange={handleCsvImport} />
+                          </label>
+                          <a href="data:text/csv;charset=utf-8,Name,Father_Name,Mobile,DOB,Institution,Branch,Address,Admission_No,Roll_No,Fees_Paid%0ARahul Kumar,Suresh Kumar,9876543210,2005-01-01,Polytechnic,Civil Engg,Amethi,GSS/2025/101,7001,5000" download="GSS_Student_Import_Sample.csv" className="bg-white text-emerald-600 border border-emerald-200 px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-emerald-50">
+                             <Download size={14} /> Sample File
+                          </a>
+                       </div>
+                    </div>
+                    <div className="w-full md:w-32 h-32 bg-emerald-100/50 rounded-3xl flex items-center justify-center text-emerald-300">
+                       <FileUp size={48} />
+                    </div>
+                 </div>
               </div>
 
               <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-                 <h3 className="text-sm font-black uppercase text-slate-900 mb-6 flex items-center gap-2"><Database size={20} className="text-emerald-600" /> Data Backup & Recovery</h3>
+                 <h3 className="text-sm font-black uppercase text-slate-900 mb-6 flex items-center gap-2"><Database size={20} className="text-indigo-600" /> Data Backup & Recovery</h3>
                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="p-6 bg-emerald-50 rounded-2xl border border-emerald-100">
-                       <p className="text-xs font-black uppercase text-emerald-800 mb-2">Export Backup</p>
-                       <p className="text-[10px] text-emerald-600 font-medium mb-4 italic leading-relaxed">Download a JSON file containing all your students, receipts, expenses, and notice data to keep it safe.</p>
-                       <button onClick={handleExportBackup} className="bg-emerald-600 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-emerald-700 transition-all">
+                    <div className="p-6 bg-indigo-50 rounded-2xl border border-indigo-100">
+                       <p className="text-xs font-black uppercase text-indigo-800 mb-2">Export Backup</p>
+                       <button onClick={handleExportBackup} className="bg-indigo-600 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2">
                           <Download size={14} /> Download File
                        </button>
                     </div>
                     <div className="p-6 bg-orange-50 rounded-2xl border border-orange-100">
                        <p className="text-xs font-black uppercase text-orange-800 mb-2">Restore Backup</p>
-                       <p className="text-[10px] text-orange-600 font-medium mb-4 italic leading-relaxed">Upload a previously downloaded GSS backup file to restore your database. This will replace current data.</p>
-                       <label className="bg-orange-600 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-orange-700 transition-all cursor-pointer w-fit">
+                       <label className="bg-orange-600 text-white px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 cursor-pointer w-fit">
                           <RefreshCw size={14} /> Upload & Restore
                           <input type="file" className="hidden" accept=".json" onChange={handleImportBackup} />
                        </label>
                     </div>
                  </div>
               </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-                  <h3 className="text-sm font-black uppercase text-slate-900 mb-6 flex items-center gap-2"><ArrowDownRight size={20} className="text-rose-500" /> New Expense</h3>
-                  <form onSubmit={handleAddExpense} className="space-y-4">
-                      <input name="title" placeholder="Expense Title (e.g. Electricity)" required className="w-full px-4 py-3 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-rose-500" />
-                      <div className="grid grid-cols-2 gap-4">
-                        <input name="amount" type="number" placeholder="Amount (₹)" required className="w-full px-4 py-3 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-rose-500" />
-                        <select name="category" className="w-full px-4 py-3 border rounded-xl text-xs font-bold outline-none">
-                            <option>Utilities</option><option>Salaries</option><option>Maintenance</option><option>Events</option>
-                        </select>
-                      </div>
-                      <button type="submit" className="w-full bg-rose-600 text-white py-3 rounded-xl font-black uppercase text-xs tracking-widest hover:bg-rose-700 transition-all">Record Expense</button>
-                  </form>
-                  <div className="mt-8 max-h-[200px] overflow-y-auto space-y-2">
-                      {expenses.map(e => (
-                        <div key={e.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100"><div className="flex flex-col"><span className="text-[10px] font-black uppercase">{e.title}</span><span className="text-[8px] font-bold text-slate-400">{e.date}</span></div><span className="text-xs font-black text-rose-600">-₹{e.amount}</span></div>
-                      ))}
-                  </div>
-                </div>
-
-                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-                  <h3 className="text-sm font-black uppercase text-slate-900 mb-6 flex items-center gap-2"><Megaphone size={20} className="text-indigo-600" /> Post Notice</h3>
-                  <form onSubmit={handleAddNotice} className="space-y-4">
-                      <input name="title" placeholder="Notice Title" required className="w-full px-4 py-3 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-500" />
-                      <textarea name="content" placeholder="Content details..." required className="w-full px-4 py-3 border rounded-xl text-xs font-bold h-24 outline-none focus:ring-2 focus:ring-indigo-500" />
-                      <select name="priority" className="w-full px-4 py-3 border rounded-xl text-xs font-bold outline-none"><option value="Normal">Normal Priority</option><option value="High">Urgent</option></select>
-                      <button type="submit" className="w-full bg-indigo-600 text-white py-3 rounded-xl font-black uppercase text-xs tracking-widest hover:bg-indigo-700">Post Announcement</button>
-                  </form>
-                </div>
-              </div>
            </div>
         )}
       </main>
+
+      {/* CSV Import Preview Modal */}
+      {importPreview && (
+        <div className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="px-8 py-6 border-b flex justify-between items-center">
+              <div>
+                <h3 className="font-black uppercase tracking-widest text-sm">Review Import List</h3>
+                <p className="text-[10px] font-bold text-slate-400 mt-1 uppercase">{importPreview.length} Students found in file</p>
+              </div>
+              <button onClick={() => setImportPreview(null)} className="p-2 hover:bg-slate-100 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+               <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-[9px] uppercase font-black text-slate-400 border-b">
+                    <tr><th className="px-4 py-2">Name</th><th className="px-4 py-2">Institution</th><th className="px-4 py-2">Branch</th><th className="px-4 py-2">Fees Paid</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {importPreview.map((s, idx) => (
+                      <tr key={idx} className="text-[10px] font-bold">
+                        <td className="px-4 py-2 uppercase">{s.name}</td>
+                        <td className="px-4 py-2 text-indigo-600">{s.institution.replace('Rajiv Gandhi ', '')}</td>
+                        <td className="px-4 py-2">{s.branch}</td>
+                        <td className="px-4 py-2">₹{s.totalFeesPaid.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+               </table>
+            </div>
+            <div className="p-6 bg-slate-50 border-t flex justify-end gap-3">
+               <button onClick={() => setImportPreview(null)} className="px-6 py-2 rounded-xl text-[10px] font-black uppercase text-slate-500 hover:bg-white border">Cancel</button>
+               <button onClick={confirmImport} className="px-6 py-2 rounded-xl text-[10px] font-black uppercase bg-indigo-600 text-white shadow-lg shadow-indigo-100 hover:bg-indigo-700">Confirm & Import All</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODALS */}
       {showModal && (
@@ -617,8 +675,18 @@ const App: React.FC = () => {
               </div>
               <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Full Name</label><input name="name" defaultValue={editingStudent?.name} required className="w-full px-4 py-2 border rounded-xl text-xs font-bold" /></div>
               <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Father Name</label><input name="fatherName" defaultValue={editingStudent?.fatherName} required className="w-full px-4 py-2 border rounded-xl text-xs font-bold" /></div>
-              <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Institution</label><select name="institution" defaultValue={editingStudent?.institution} className="w-full px-4 py-2 border rounded-xl text-xs font-bold">{Object.values(InstitutionType).map(v => <option key={v} value={v}>{v}</option>)}</select></div>
-              <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Branch</label><input name="branch" defaultValue={editingStudent?.branch} required className="w-full px-4 py-2 border rounded-xl text-xs font-bold" /></div>
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Institution</label>
+                <select name="institution" value={selectedInstInModal} onChange={(e) => setSelectedInstInModal(e.target.value as InstitutionType)} className="w-full px-4 py-2 border rounded-xl text-xs font-bold">
+                  {Object.values(InstitutionType).map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Branch</label>
+                <select name="branch" defaultValue={editingStudent?.branch} required className="w-full px-4 py-2 border rounded-xl text-xs font-bold">
+                  {INSTITUTIONS[selectedInstInModal].branches.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
               <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Mobile</label><input name="mobileNumber" defaultValue={editingStudent?.mobileNumber} required className="w-full px-4 py-2 border rounded-xl text-xs font-bold" /></div>
               <div><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">DOB</label><input name="dob" type="date" defaultValue={editingStudent?.dob} required className="w-full px-4 py-2 border rounded-xl text-xs font-bold" /></div>
               <div className="md:col-span-2"><label className="text-[10px] font-black uppercase text-slate-400 block mb-1">Address</label><textarea name="address" defaultValue={editingStudent?.address} required className="w-full px-4 py-2 border rounded-xl text-xs font-bold h-20" /></div>
@@ -632,7 +700,26 @@ const App: React.FC = () => {
          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in">
             <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[80vh]">
                <div className="p-6 bg-slate-50 border-b flex justify-between items-center"><h3 className="font-black uppercase text-xs">Payment Ledger: {showLedger.name}</h3><button onClick={() => setShowLedger(null)}><X size={20} /></button></div>
-               <div className="flex-1 overflow-y-auto p-6"><table className="w-full text-left"><thead className="text-[10px] uppercase font-black text-slate-400 border-b tracking-wider"><tr><th className="pb-3">Receipt #</th><th className="pb-3">Date</th><th className="pb-3">Mode</th><th className="pb-3 text-right">Amount</th></tr></thead><tbody className="divide-y divide-slate-50">{allReceipts.filter(r => r.studentId === showLedger.id).map(r => (<tr key={r.receiptId} className="hover:bg-slate-50"><td className="py-4 text-[10px] font-bold">{r.receiptId}</td><td className="py-4 text-[10px] font-bold">{r.date}</td><td className="py-4 text-[10px] font-bold uppercase">{r.paymentMode}</td><td className="py-4 text-[10px] font-black text-indigo-600 text-right">₹{r.amount.toLocaleString()}</td></tr>))}</tbody></table>{allReceipts.filter(r => r.studentId === showLedger.id).length === 0 && <p className="text-center text-[10px] text-slate-400 py-10 uppercase font-black">No transaction history found.</p>}</div>
+               <div className="flex-1 overflow-y-auto p-6">
+                  <table className="w-full text-left">
+                    <thead className="text-[10px] uppercase font-black text-slate-400 border-b tracking-wider">
+                      <tr><th className="pb-3">Receipt #</th><th className="pb-3">Date</th><th className="pb-3">Mode</th><th className="pb-3 text-right">Amount</th><th className="pb-3 text-right">View</th></tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {allReceipts.filter(r => r.studentId === showLedger.id).map(r => (
+                        <tr key={r.receiptId} className="hover:bg-slate-50">
+                          <td className="py-4 text-[10px] font-bold">{r.receiptId}</td>
+                          <td className="py-4 text-[10px] font-bold">{r.date}</td>
+                          <td className="py-4 text-[10px] font-bold uppercase">{r.paymentMode}</td>
+                          <td className="py-4 text-[10px] font-black text-indigo-600 text-right">₹{r.amount.toLocaleString()}</td>
+                          <td className="py-4 text-right">
+                             <button onClick={() => setShowReceipt(r)} className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><Eye size={16} /></button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+               </div>
             </div>
          </div>
       )}
@@ -646,8 +733,15 @@ const App: React.FC = () => {
       {showReceipt && selectedStudentForReceipt && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/90 no-print overflow-y-auto">
           <div className="bg-slate-200 p-8 rounded-lg max-w-[1000px] w-full">
-            <div className="flex gap-4 p-4 bg-white shadow-2xl overflow-x-auto min-w-[800px]"><ReceiptCopy title="Office Copy" student={selectedStudentForReceipt} receipt={showReceipt} /><div className="border-l border-dashed border-slate-400 mx-1"></div><ReceiptCopy title="Student Copy" student={selectedStudentForReceipt} receipt={showReceipt} /></div>
-            <div className="mt-6 flex gap-4"><button onClick={() => window.print()} className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 uppercase text-xs tracking-widest"><Printer size={20} /> Print Copy</button><button onClick={() => setShowReceipt(null)} className="flex-1 bg-white text-slate-600 py-3 rounded-xl font-bold uppercase text-xs tracking-widest">Close</button></div>
+            <div className="flex flex-col md:flex-row gap-4 p-4 bg-white shadow-2xl overflow-x-auto">
+               <ReceiptCopy title="Office Copy" student={selectedStudentForReceipt} receipt={showReceipt} />
+               <div className="border-l border-dashed border-slate-400 mx-1 hidden md:block"></div>
+               <ReceiptCopy title="Student Copy" student={selectedStudentForReceipt} receipt={showReceipt} />
+            </div>
+            <div className="mt-6 flex gap-4">
+               <button onClick={() => window.print()} className="flex-1 bg-emerald-600 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 uppercase text-xs tracking-widest"><Printer size={20} /> Print Receipt</button>
+               <button onClick={() => setShowReceipt(null)} className="flex-1 bg-white text-slate-600 py-3 rounded-xl font-bold uppercase text-xs tracking-widest">Close Preview</button>
+            </div>
           </div>
         </div>
       )}
